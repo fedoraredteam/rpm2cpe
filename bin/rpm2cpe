@@ -1,4 +1,4 @@
 #!/bin/bash
 
 BINPATH=`dirname $0`
-python "$BINPATH/../rpm2cpe/main.py" $@
+python "$BINPATH/../rpm2cpe/rpm2cpe.py" $@

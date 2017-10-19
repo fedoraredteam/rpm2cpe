@@ -1,4 +1,8 @@
-from distutils.core import setup
+try:
+    from setuptools import setup
+except ImportError:
+    from distutils.core import setup
+    
 setup(name='rpm2cpe',
       packages=['rpm2cpe'],
       version='0.0.1',

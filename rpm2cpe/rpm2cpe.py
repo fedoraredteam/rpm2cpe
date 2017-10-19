@@ -62,6 +62,7 @@ class Rpm(object):
             version = pieces[0][1]
         else:
             package_name = working_string
+            version = '*'
 
         return package_name, version, release or "*", architecture or "*"
 

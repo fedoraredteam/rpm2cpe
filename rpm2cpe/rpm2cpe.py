@@ -2,7 +2,9 @@ import re
 import argparse
 import json
 import subprocess
-import sys
+import flask
+application = flask.Flask(__name__)
+
 class Rpm(object):
     valid_archs = ['i386', 'i486', 'i586', 'i686', 'athlon', 'geode', 'pentium3', 
                    'pentium4', 'x86_64', 'amd64', 'ia64', 'alpha', 'alphaev5', 
@@ -30,74 +32,51 @@ class Rpm(object):
     def file_name(self):
         return self.rpm_name + '.rpm'
 
+    def get_arch(self):
+        for arch in self.valid_archs:
+            if arch in self.rpm_name:
+                return arch
+        return None
+
+    def get_release(self):
+        for release in self.valid_releases:
+            if release in self.rpm_name:
+                match = re.search(r"(" + release + "[^\.]*(?=\.)?)", self.rpm_name)
+                return match.group(0)
+        return None
+
     def pieces(self):
         package_name = []
         release = None
         architecture = None
-        major = None
-        minor = None
-        micro = None
-        special = None
+        version = None
 
-        pieces = re.split(r"(^\d*\D+\d*)(?=-\d)", self.rpm_name)
-        if pieces[0]:
-            smaller_pieces = re.findall(r"([a-zA-Z1-9\-_]+)", pieces[0], re.X)
-            package_name = smaller_pieces[0]
-            if len(smaller_pieces) == 3:
-                release = smaller_pieces[1]
-                architecture = smaller_pieces[2]
-            elif len(smaller_pieces) == 2:
-                architecture = smaller_pieces[1]
-        elif pieces[1]:
-            package_name = pieces[1]
-            for smaller_piece in re.findall(r"([a-zA-Z1-9_]+)", pieces[2], re.X):
-                if smaller_piece in self.valid_archs:
-                    architecture = smaller_piece
-                elif smaller_piece in self.valid_releases:
-                    release = smaller_piece
-                elif not major:
-                    major = smaller_piece
-                elif not minor:
-                    minor = smaller_piece
-                elif not micro:
-                    micro = smaller_piece
-                elif not special:
-                    special = smaller_piece
+        working_string = self.rpm_name
+        architecture = self.get_arch()
+        release = self.get_release()
+        if architecture:
+            working_string = working_string.replace('.' + architecture, '')
+        if release:
+            working_string = working_string.replace('.' + release, '')
+        pieces = re.findall(r"([a-zA-Z0-9-]+)(?=-\d)-(\d.*)", working_string, re.X)
+        if pieces:
+            package_name = pieces[0][0]
+            version = pieces[0][1]
+        else:
+            package_name = working_string
 
-        return package_name, major, minor, micro, special, release or "*", architecture or "*"
+        return package_name, version, release or "*", architecture or "*"
 
     def cpe(self):
         versions = []
         cpe_strings = []
-        name, major, minor, micro, special, release, architecture = self.pieces()
+        name, version, release, architecture = self.pieces()
+        versions.append(version)
         # We will build one version string if 'strict' is required
-        if self.strict:
-            version = major
-            if minor:
-                version += '.'
-                version += minor
-            if micro:
-                version += '.'
-                version += micro
-            if special:
-                version += '-'
-                version += special
-            versions.append(version)
-        else:
-            version = major
-            versions.append(version)
-            if minor:
-                version += '.'
-                version += minor
-                versions.append(version)
-            if micro:
-                version += '.'
-                version += micro
-                versions.append(version)
-            if special:
-                version += '-'
-                version += special
-                versions.append(version)
+        if not self.strict:
+            version_pieces = version.split('.')
+            for i in range(1, len(version_pieces)):
+                versions.append('.'.join(version_pieces[:i]))
 
         # Now we build the answers
         for version in versions:
@@ -112,7 +91,7 @@ class Rpm(object):
             try:
                 cpe_strings.append(':'.join(cpe))
             except TypeError:
-                cpe_strings.append("error: " + self.rpm_name)
+                cpe_strings.append("regex failure: " + self.rpm_name)
         return cpe_strings
 
     def __iter__(self):
@@ -126,7 +105,7 @@ class Rpm(object):
     def csv(self):
         line_start = '\n' + self.rpm_name + ','
         if len(self.cpe()) > 1:
-            return line_start.join(self.cpe())
+            return self.rpm_name + ',' + line_start.join(self.cpe())
         return self.rpm_name + ',' + self.cpe()[0]
 
     def json(self, pretty=False):
@@ -139,20 +118,27 @@ class Repo(object):
         self.name = name
         self.rpms = []
         self.strict = strict
+        self.el_error_msg = "Unable to obtain repo information.  This is may not be an enterprise Linux host."
 
     def _get_rpms(self):
-        try:
-            command = ["yum", "list", "available", 
-                       "--enablerepo=" + self.name,
-                       "--showduplicates"]
-            p = subprocess.Popen(command,
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
-            out, err = p.communicate()
-            lines = out.split('\n')
-            error_lines = err.split('\n')
-        except OSError:
-            sys.exit(1)
+        command = ["yum", "makecache", "fast",
+                   "--disablerepo=*" 
+                   "--enablerepo=" + self.name]
+        p = subprocess.Popen(command,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        
+        command = ["yum", "list", "available",
+                   "--disablerepo=*" 
+                   "--enablerepo=" + self.name,
+                   "--showduplicates"]
+        p = subprocess.Popen(command,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        lines = out.split('\n')
+        error_lines = err.split('\n')
+
         for index, rpm_line in enumerate(lines):
             try:
                 if not re.match(r'^[a-zA-Z0-9]', lines[index+1]) and not index == len(lines) - 1:
@@ -173,18 +159,30 @@ class Repo(object):
 
     def __str__(self):
         cpes = []
-        self._get_rpms()
-        for rpm in self.rpms:
-            cpes.append(rpm.cpe())    
-        flat_list = [item for sublist in cpes for item in sublist]
-        return '\n'.join(flat_list)
+        try:
+            self._get_rpms()
+            for rpm in self.rpms:
+                cpes.append(rpm.cpe())    
+            flat_list = [item for sublist in cpes for item in sublist]
+            return '\n'.join(sorted(list(set(flat_list))))
+        except OSError as error:
+            if error.errno == 2:
+                return self.name + ": " + self.el_error_msg
+            return self.name + ": " + error
 
     def __iter__(self):
-        self._get_rpms()
-        repo_dict = dict()
-        for rpm in self.rpms:
-            repo_dict.update(dict(rpm))
-        yield(self.name, repo_dict)
+        try:
+            self._get_rpms()
+            repo_dict = dict()
+            for rpm in self.rpms:
+                repo_dict.update(dict(rpm))
+            yield(self.name, repo_dict)
+        except OSError as error:
+            if error.errno == 2:
+                yield(self.name, dict(error=self.el_error_msg))
+            else:
+                yield(self.name, dict(error=str(error)))
+
 
     def json(self, pretty=False):
         if pretty:
@@ -192,13 +190,18 @@ class Repo(object):
         return json.dumps(dict(self))
 
     def csv(self):
-        lines = []
-        self._get_rpms()
-        line_start = self.name + ','
-        for rpm in self.rpms:
-            for line in rpm.csv().split('\n'):
-                lines.append(line_start + line)
-        return '\n'.join(lines)
+        try:
+            lines = []
+            self._get_rpms()
+            line_start = self.name + ','
+            for rpm in self.rpms:
+                for line in rpm.csv().split('\n'):
+                    lines.append(line_start + line)
+            return '\n'.join(sorted(list(set(lines))))
+        except OSError as error:
+            if error.errno == 2:
+                return self.name + ',error,' + self.el_error_msg
+            return self.name + ',error,' + error
 
 
 def print_resource(resource, output_format):
@@ -208,6 +211,40 @@ def print_resource(resource, output_format):
         print resource.json(pretty=True)
     elif output_format == 'c':
         print resource.csv()
+
+@application.route('/rpm')
+def flask_rpm():
+    rpmnames = flask.request.args.getlist('name')
+    strict_arg = flask.request.args.get('strict')
+
+    if strict_arg in ['True', 'true', '1', 't', 'y', 'yes', 'yeah', 'yup', 'uh-huh']:
+        strict = True
+    else:
+        strict = False
+
+    result = dict()
+    for rpmname in rpmnames:
+        print rpmname
+        rpm2cpe = Rpm(rpmname, strict)
+        result.update(dict(rpm2cpe))
+
+    return flask.jsonify(result) 
+
+@application.route('/repo')
+def flask_repo():
+    reponames = flask.request.args.getlist('name')
+    strict_arg = flask.request.args.get('strict')
+
+    if strict_arg in ['True', 'true', '1', 't', 'y', 'yes', 'yeah', 'yup', 'uh-huh']:
+        strict = True
+    else:
+        strict = False
+
+    result = dict()
+    for reponame in reponames:
+        repo = Repo(reponame, strict)
+        result.update(dict(repo))
+    return flask.jsonify(result)
 
 def main():
     parser = argparse.ArgumentParser(description='Translate an RPM name to CPE.')

@@ -3,6 +3,7 @@ Translates the name of an RPM to the NVD [CPE](https://cpe.mitre.org/specificati
 
 **NOTE:** This isn't perfect, and pull requests are welcome.
 
+## Command Line Interface
 ```terminal
 usage: rpm2cpe.py [-h] (--rpm RPM [RPM ...] | --repo REPO [REPO ...]) [-s]
                   [-t | -j | -c]
@@ -22,3 +23,7 @@ optional arguments:
   -j, --json
   -c, --csv
 ```
+
+## OpenShift S2I
+rpm2cpe includes a REST interface that can be deployed into OpenShift via S2I.
+

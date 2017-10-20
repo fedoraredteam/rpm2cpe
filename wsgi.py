@@ -16,7 +16,6 @@ def flask_rpm():
 
     result = dict()
     for rpmname in rpmnames:
-        print rpmname
         rpm2cpe = Rpm(rpmname, strict)
         result.update(dict(rpm2cpe))
 

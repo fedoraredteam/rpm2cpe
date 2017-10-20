@@ -1,1 +1,3 @@
 tests/*
+rpm2cpe.egg-info/
+dist/

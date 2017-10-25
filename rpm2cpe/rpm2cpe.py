@@ -3,16 +3,42 @@ import argparse
 import json
 import subprocess
 
+class Cpe(object):
+    def __init__(self, name, version):
+        self.name = name
+        self.version = version
+        self.vulnerable = True
+    
+    def cpeMatchString(self):
+        cpe = ['cpe:/a']
+        cpe.append('*')  # Vendor
+        cpe.append(self.name) # Package Name
+        cpe.append(self.version)
+        return ':'.join(cpe)
+
+    def cpe23Uri(self):
+        cpe = ['cpe:2.3:a']
+        cpe.append('*')
+        cpe.append(self.name)
+        cpe.append(self.version)
+        cpe.append('*:*:*:*:*:*:*')
+        return ':'.join(cpe)
+
+    def __str__(self):
+        return self.cpeMatchString() + ',' + self.cpe23Uri()
+
+
+
 class Rpm(object):
-    valid_archs = ['i386', 'i486', 'i586', 'i686', 'athlon', 'geode', 'pentium3', 
-                   'pentium4', 'x86_64', 'amd64', 'ia64', 'alpha', 'alphaev5', 
-                   'alphaev56', 'alphapca56', 'alphaev6', 'alphaev67', 'sparc', 
-                   'sparcv8', 'sparcv9', 'sparc64', 'sparc64v', 'sun4', 'sun4c', 
-                   'sun4d', 'sun4m', 'sun4u', 'armv3l', 'armv4b', 'armv4l', 
-                   'armv5tel', 'armv5tejl', 'armv6l', 'armv7l', 'mips', 'mipsel', 
-                   'ppc', 'ppciseries', 'ppcpseries', 'ppc64', 'ppc8260', 'ppc8560', 
-                   'ppc32dy4', 'm68k', 'm68kmint', 'atarist', 'atariste', 'ataritt', 
-                   'falcon', 'atariclone', 'milan', 'hades', 'Sgi', 'rs6000', 'i370', 
+    valid_archs = ['i386', 'i486', 'i586', 'i686', 'athlon', 'geode', 'pentium3',
+                   'pentium4', 'x86_64', 'amd64', 'ia64', 'alpha', 'alphaev5',
+                   'alphaev56', 'alphapca56', 'alphaev6', 'alphaev67', 'sparc',
+                   'sparcv8', 'sparcv9', 'sparc64', 'sparc64v', 'sun4', 'sun4c',
+                   'sun4d', 'sun4m', 'sun4u', 'armv3l', 'armv4b', 'armv4l',
+                   'armv5tel', 'armv5tejl', 'armv6l', 'armv7l', 'mips', 'mipsel',
+                   'ppc', 'ppciseries', 'ppcpseries', 'ppc64', 'ppc8260', 'ppc8560',
+                   'ppc32dy4', 'm68k', 'm68kmint', 'atarist', 'atariste', 'ataritt',
+                   'falcon', 'atariclone', 'milan', 'hades', 'Sgi', 'rs6000', 'i370',
                    's390x', 's390', 'noarch']
 
     def __init__(self, rpm_name, strict=False, release_info=False, arch_info=False):
@@ -66,10 +92,10 @@ class Rpm(object):
 
         return package_name, version, release or "*", architecture or "*"
 
-    def cpe(self):
+    def cpes(self):
         versions = []
-        cpe_strings = []
-        name, version, release, architecture = self.pieces()
+        cpes = []
+        name, version, _, _ = self.pieces()
         versions.append(version)
         # We will build one version string if 'strict' is required
         if not self.strict:
@@ -79,33 +105,28 @@ class Rpm(object):
 
         # Now we build the answers
         for version in versions:
-            cpe = ['cpe:/a']
-            cpe.append('*')  # Vendor
-            cpe.append(name) # Package Name
-            cpe.append(version)
-            if self.release_info:
-                cpe.append(release)
-            if self.arch_info:
-                cpe.append(architecture)
-            try:
-                cpe_strings.append(':'.join(cpe))
-            except TypeError:
-                cpe_strings.append("regex failure: " + self.rpm_name)
-        return cpe_strings
+            cpes.append(Cpe(name, version))
+            
+        return cpes
 
     def __iter__(self):
-        yield (self.rpm_name, self.cpe())
+        result = []
+        for cpe in self.cpes():
+            result.append(dict(vulnerable=True,
+                                cpeMatchString=cpe.cpeMatchString(),
+                                cpe23Uri=cpe.cpe23Uri()))
+        yield (self.rpm_name, dict(cpe=result))
 
     def __str__(self):
-        if len(self.cpe()) > 1:
-            return '\n'.join(self.cpe())
-        return ''.join(self.cpe())
+        if len(self.cpes()) > 1:
+            return '\n'.join([str(cpe) for cpe in self.cpes()])
+        return ''.join([str(cpe) for cpe in self.cpes()])
 
     def csv(self):
         line_start = '\n' + self.rpm_name + ','
-        if len(self.cpe()) > 1:
-            return self.rpm_name + ',' + line_start.join(self.cpe())
-        return self.rpm_name + ',' + self.cpe()[0]
+        if len(self.cpes()) > 1:
+            return self.rpm_name + ',' + line_start.join([str(cpe) for cpe in self.cpes()])
+        return self.rpm_name + ',' + [str(cpe) for cpe in self.cpes()][0]
 
     def json(self, pretty=False):
         if pretty:
